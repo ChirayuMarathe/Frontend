@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+const supabaseServiceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
+
 // Initialize Supabase client with PKCE auth flow
 // PKCE uses ?code= query params instead of #access_token= hash fragments,
 // allowing React Router to properly route the OAuth callback.
@@ -15,7 +17,17 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-export { supabase };
+// Initialize Admin client to bypass RLS for development/onboarding if service role key is provided
+const supabaseAdmin = supabaseServiceRoleKey
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
+  : supabase;
+
+export { supabase, supabaseAdmin };
 
 // AUTH HELPERS
 export const signOut = async () => {

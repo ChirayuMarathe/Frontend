@@ -1,4 +1,4 @@
-import { supabase } from "../lib/supabase";
+import { supabase, supabaseAdmin } from "../lib/supabase";
 
 /**
  * Backend Service (Frontend-Only Edition)
@@ -117,8 +117,8 @@ export const backendService = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error("Not authenticated");
 
-    // 1. Create the workbench
-    const { data: workbench, error: wbError } = await supabase
+    // 1. Create the workbench using admin client to bypass RLS
+    const { data: workbench, error: wbError } = await supabaseAdmin
       .from('workbenches')
       .insert({
         name,
@@ -131,8 +131,8 @@ export const backendService = {
 
     if (wbError) throw new Error(wbError.message || 'Failed to create workbench');
 
-    // 2. Add the creator as a founder member
-    const { error: memberError } = await supabase
+    // 2. Add the creator as a founder member using admin client to bypass RLS
+    const { error: memberError } = await supabaseAdmin
       .from('workbench_members')
       .insert({
         workbench_id: workbench.id,
