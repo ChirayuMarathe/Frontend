@@ -1,0 +1,42 @@
+.custom-cursor {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.blue-hover {
+    cursor: url('/dobby.ico'), auto !important;
+    pointer-events: all;
+    position: relative;
+    z-index: 20;
+}
+
+/* Add hover effects for interactive elements */
+.blue-hover:hover {
+    cursor: url('/dobby.ico') 16 16, pointer !important;
+    transition: all 0.2s ease-in-out;
+}
+
+/* Fallback styling */
+@supports not (cursor: url('/dobby.ico')) {
+    .blue-hover {
+        cursor: pointer;
+    }
+}
+
+.squares-container {
+    pointer-events: none !important;
+    position: relative;
+    z-index: 10;
+}
+
+.interactive {
+    pointer-events: auto;
+}
+
+/* For IE fallback */
+@media screen and (-ms-high-contrast: active),
+(-ms-high-contrast: none) {
+    .blue-hover {
+        cursor: pointer;
+    }
+}
