@@ -65,8 +65,8 @@ const CreateWorkbenchModal = ({ isOpen, onClose, onSuccess }) => {
     if (step > 1) setStep(step - 1);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (e, isDummy = false) => {
+    e?.preventDefault();
     if (!isStepValid() || step < 4) return;
 
     setLoading(true);
@@ -78,7 +78,7 @@ const CreateWorkbenchModal = ({ isOpen, onClose, onSuccess }) => {
         name.trim(),
         books_start_date,
         `Workbench for ${name.trim()}`,
-        extraData
+        { ...extraData, is_dummy: isDummy }
       );
 
       onSuccess(workbench);
@@ -281,18 +281,28 @@ const CreateWorkbenchModal = ({ isOpen, onClose, onSuccess }) => {
                 Next Step <ChevronRight size={18} />
               </button>
             ) : (
-              <button
-                type="submit"
-                className={`submit-btn ${!isStepValid() || loading ? 'disabled' : ''}`}
-                onClick={handleSubmit}
-                disabled={!isStepValid() || loading}
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw size={18} className="spinning" /> Creating...
-                  </>
-                ) : 'Create Workbench'}
-              </button>
+              <div className="flex gap-3" style={{ display: 'flex', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className={`dummy-btn ${!isStepValid() || loading ? 'disabled' : ''}`}
+                  onClick={(e) => handleSubmit(e, true)}
+                  disabled={!isStepValid() || loading}
+                >
+                  Create Dummy (Offline)
+                </button>
+                <button
+                  type="submit"
+                  className={`submit-btn ${!isStepValid() || loading ? 'disabled' : ''}`}
+                  onClick={(e) => handleSubmit(e, false)}
+                  disabled={!isStepValid() || loading}
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw size={18} className="spinning" /> Creating...
+                    </>
+                  ) : 'Create Workbench'}
+                </button>
+              </div>
             )}
           </div>
         </form>
@@ -497,11 +507,30 @@ const CreateWorkbenchModal = ({ isOpen, onClose, onSuccess }) => {
           cursor: pointer;
         }
 
-        .next-btn.disabled, .submit-btn.disabled {
+        .dummy-btn {
+          background-color: transparent;
+          color: #81E6D9;
+          border: 1px solid #81E6D9;
+          padding: 0.75rem 1.8rem;
+          border-radius: 0.75rem;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          transition: all 0.2s;
+          cursor: pointer;
+        }
+
+        .dummy-btn:hover {
+          background-color: rgba(129, 230, 217, 0.1);
+        }
+
+        .next-btn.disabled, .submit-btn.disabled, .dummy-btn.disabled {
           background-color: #333;
           color: #666;
           cursor: not-allowed;
           opacity: 0.5;
+          border-color: #333;
         }
 
         .back-btn {

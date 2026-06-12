@@ -1,7 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Set this to true to run the app in dummy/mocked mode (bypasses RLS database issues)
-const USE_DUMMY_MODE = true;
+// Hybrid Client Mode:
+// - Real workbenches are saved/read from Supabase.
+// - Dummy/mock workbenches (with 'mock-' prefix) are saved/read from localStorage.
+const USE_DUMMY_MODE = false; 
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -26,7 +28,7 @@ const realSupabaseAdmin = supabaseServiceRoleKey
     })
   : realSupabase;
 
-// --- DUMMY MODE IMPLEMENTATION ---
+// --- DUMMY & HYBRID ROUTING STORAGE ---
 const COLLECTIONS = {
   workbenches: 'dabby_local_workbenches',
   workbench_members: 'dabby_local_workbench_members',
@@ -43,7 +45,7 @@ const getCollection = (name) => {
   const val = localStorage.getItem(COLLECTIONS[name]);
   if (val) return JSON.parse(val);
   
-  // Seed initial dummy data if storage is empty
+  // Seed initial dummy data if empty
   let initial = [];
   if (name === 'workbenches') {
     initial = [
@@ -57,7 +59,8 @@ const getCollection = (name) => {
         industry: 'services',
         business_type: 'pvt_ltd',
         location: 'India',
-        currency: 'INR'
+        currency: 'INR',
+        is_dummy: true
       }
     ];
   } else if (name === 'workbench_members') {
@@ -81,41 +84,7 @@ const getCollection = (name) => {
       { id: 'l7', workbench_id: 'mock-wb-1', name: 'Rent', type: 'expense' },
       { id: 'l8', workbench_id: 'mock-wb-1', name: 'Software & Subscriptions', type: 'expense' },
     ];
-  } else if (name === 'workbench_records') {
-    initial = [
-      {
-        id: 'r1',
-        workbench_id: 'mock-wb-1',
-        record_type: 'transaction',
-        summary: 'SaaS Subscription Payment',
-        created_at: new Date().toISOString(),
-        metadata: { amount: 120, category: 'Software & Subscriptions', transaction_date: '2026-06-01', labels: ['l8'] }
-      },
-      {
-        id: 'r2',
-        workbench_id: 'mock-wb-1',
-        record_type: 'transaction',
-        summary: 'Client Consulting Retainer',
-        created_at: new Date().toISOString(),
-        metadata: { amount: 5000, category: 'Operating Revenue', transaction_date: '2026-06-05', labels: ['l5'] }
-      },
-      {
-        id: 'r3',
-        workbench_id: 'mock-wb-1',
-        record_type: 'transaction',
-        summary: 'Office Rent Payment',
-        created_at: new Date().toISOString(),
-        metadata: { amount: 1500, category: 'Rent', transaction_date: '2026-06-10', labels: ['l7'] }
-      }
-    ];
-  } else if (name === 'parties') {
-    initial = [
-      { id: 'p1', workbench_id: 'mock-wb-1', name: 'Self', category: 'self' },
-      { id: 'p2', workbench_id: 'mock-wb-1', name: 'Acme Client', category: 'customer' },
-      { id: 'p3', workbench_id: 'mock-wb-1', name: 'AWS Cloud', category: 'vendor' },
-    ];
   }
-  
   localStorage.setItem(COLLECTIONS[name], JSON.stringify(initial));
   return initial;
 };
@@ -123,6 +92,8 @@ const getCollection = (name) => {
 const saveCollection = (name, data) => {
   localStorage.setItem(COLLECTIONS[name], JSON.stringify(data));
 };
+
+const isMockId = (id) => typeof id === 'string' && id.startsWith('mock-');
 
 const makeMockBuilder = (data = []) => {
   const builder = {
@@ -138,154 +109,228 @@ const makeMockBuilder = (data = []) => {
   });
 };
 
-const supabaseMock = {
-  auth: {
-    getUser: async () => ({
-      data: {
-        user: {
-          id: 'mock-user-id',
-          email: 'founder@dabby.ai',
-        }
-      },
-      error: null
-    }),
-    onAuthStateChange: (callback) => {
-      // Small timeout to simulate auth event trigger
-      setTimeout(() => {
-        callback('SIGNED_IN', {
-          id: 'mock-user-id',
-          email: 'founder@dabby.ai',
-        });
-      }, 50);
-      return { data: { subscription: { unsubscribe: () => {} } } };
-    },
-    signOut: async () => {},
-  },
-  
-  storage: {
-    from: () => ({
-      upload: async (path, file) => ({ data: { path }, error: null }),
-      remove: async (paths) => ({ data: {}, error: null }),
-      createSignedUrl: async (path, expires) => ({ data: { signedUrl: 'https://via.placeholder.com/150' }, error: null }),
-      download: async (path) => ({ data: new Blob(), error: null }),
-    })
-  },
-  
-  functions: {
-    invoke: async (name, options) => {
-      console.log(`[MOCK] Edge Function: ${name}`, options);
-      if (name === 'create-chat-session') {
-        return { data: { id: crypto.randomUUID(), title: options.body?.title || 'Chat Session' }, error: null };
-      }
-      return { data: {}, error: null };
-    }
-  },
+const originalFrom = realSupabase.from.bind(realSupabase);
 
-  from: (table) => {
-    const collName = COLLECTIONS[table] ? table : null;
-    
-    return {
-      select: (fields = '*') => {
-        if (!collName) return makeMockBuilder([]);
-        const list = getCollection(collName);
-        return {
-          eq: (col, val) => {
-            const filtered = list.filter(item => item[col] === val);
-            return makeMockBuilder(filtered);
-          },
-          in: (col, vals) => {
-            const filtered = list.filter(item => vals.includes(item[col]));
-            return makeMockBuilder(filtered);
-          },
-          order: () => makeMockBuilder(list),
-          limit: () => makeMockBuilder(list),
-          single: () => makeMockBuilder(list[0] || null),
-          then: (resolve) => resolve({ data: list, error: null })
-        };
-      },
-      
-      insert: (data) => {
-        if (!collName) return makeMockBuilder([data]);
-        const list = getCollection(collName);
-        const rows = Array.isArray(data) ? data : [data];
-        const newRows = rows.map(r => ({
-          id: r.id || crypto.randomUUID(),
-          created_at: new Date().toISOString(),
-          ...r
-        }));
-        list.push(...newRows);
-        saveCollection(collName, list);
-        
-        // Auto-assign workbench membership locally
-        if (table === 'workbenches') {
-          const members = getCollection('workbench_members');
-          newRows.forEach(wb => {
-            members.push({
-              id: crypto.randomUUID(),
-              workbench_id: wb.id,
-              user_id: 'mock-user-id',
-              role: 'founder',
-              created_at: new Date().toISOString()
-            });
-          });
-          saveCollection('workbench_members', members);
-        }
-        
-        return makeMockBuilder(newRows);
-      },
-      
-      upsert: (data) => {
-        if (!collName) return makeMockBuilder([data]);
-        const list = getCollection(collName);
-        const rows = Array.isArray(data) ? data : [data];
-        rows.forEach(r => {
-          const idx = list.findIndex(item => item.id === r.id);
-          if (idx >= 0) {
-            list[idx] = { ...list[idx], ...r };
-          } else {
-            list.push({ id: crypto.randomUUID(), ...r });
-          }
-        });
-        saveCollection(collName, list);
-        return makeMockBuilder(rows);
-      },
-      
-      update: (data) => {
-        return {
-          eq: (col, val) => {
-            if (collName) {
-              const list = getCollection(collName);
-              list.forEach(item => {
-                if (item[col] === val) {
-                  Object.assign(item, data);
+const buildHybridClient = (baseClient) => {
+  return new Proxy(baseClient, {
+    get(target, prop) {
+      if (prop === 'from') {
+        return (table) => {
+          const collName = COLLECTIONS[table] ? table : null;
+          
+          return {
+            select: (fields = '*') => {
+              let eqCol = null;
+              let eqVal = null;
+              let inCol = null;
+              let inVals = [];
+              
+              const executeQuery = () => {
+                const localList = getCollection(table);
+                
+                // Route to localStorage if filtering by mock ID
+                if ((eqCol === 'workbench_id' && isMockId(eqVal)) || 
+                    (eqCol === 'id' && isMockId(eqVal) && table === 'workbenches')) {
+                  const filtered = localList.filter(item => item[eqCol] === eqVal);
+                  return makeMockBuilder(filtered);
                 }
-              });
-              saveCollection(collName, list);
-            }
-            return makeMockBuilder([data]);
-          }
-        };
-      },
-      
-      delete: () => {
-        return {
-          eq: (col, val) => {
-            if (collName) {
+                
+                if (inCol === 'id' && table === 'workbenches' && inVals.some(isMockId)) {
+                  return {
+                    then: async (resolve) => {
+                      const dbIds = inVals.filter(id => !isMockId(id));
+                      let dbData = [];
+                      if (dbIds.length > 0) {
+                        try {
+                          const res = await originalFrom(table).select(fields).in(inCol, dbIds);
+                          dbData = res.data || [];
+                        } catch (e) {}
+                      }
+                      const mockData = localList.filter(item => inVals.includes(item.id));
+                      resolve({ data: [...dbData, ...mockData], error: null });
+                    }
+                  };
+                }
+                
+                // Special case: Fetching all workbenches or memberships
+                if (!eqCol && !inCol) {
+                  if (table === 'workbenches') {
+                    return {
+                      then: async (resolve) => {
+                        let dbData = [];
+                        try {
+                          const res = await originalFrom(table).select(fields).order('created_at', { ascending: false });
+                          dbData = res.data || [];
+                        } catch (e) {}
+                        resolve({ data: [...dbData, ...localList], error: null });
+                      }
+                    };
+                  }
+                  if (table === 'workbench_members') {
+                    return {
+                      then: async (resolve) => {
+                        let dbData = [];
+                        try {
+                          const res = await originalFrom(table).select(fields);
+                          dbData = res.data || [];
+                        } catch (e) {}
+                        resolve({ data: [...dbData, ...localList], error: null });
+                      }
+                    };
+                  }
+                }
+                
+                // Fallback to real Supabase query
+                let query = originalFrom(table).select(fields);
+                if (eqCol) query = query.eq(eqCol, eqVal);
+                if (inCol) query = query.in(inCol, inVals);
+                return query;
+              };
+              
+              return {
+                eq: (col, val) => {
+                  eqCol = col;
+                  eqVal = val;
+                  return {
+                    single: () => {
+                      const res = executeQuery();
+                      if (res.single) return res.single();
+                      return {
+                        then: async (resolve) => {
+                          const r = await res;
+                          resolve({ data: Array.isArray(r.data) ? r.data[0] : r.data, error: r.error });
+                        }
+                      };
+                    },
+                    then: (resolve) => executeQuery().then(resolve)
+                  };
+                },
+                in: (col, vals) => {
+                  inCol = col;
+                  inVals = vals;
+                  return {
+                    then: (resolve) => executeQuery().then(resolve)
+                  };
+                },
+                order: () => executeQuery(),
+                limit: () => executeQuery(),
+                then: (resolve) => executeQuery().then(resolve)
+              };
+            },
+            
+            insert: (data) => {
+              if (!collName) return makeMockBuilder([data]);
               const list = getCollection(collName);
-              const filtered = list.filter(item => item[col] !== val);
-              saveCollection(collName, filtered);
+              const rows = Array.isArray(data) ? data : [data];
+              
+              const hasMock = rows.some(r => isMockId(r.workbench_id) || isMockId(r.id) || r.is_dummy);
+              
+              if (hasMock || (table === 'workbenches' && rows.some(r => r.name.toLowerCase().includes('dummy') || r.is_dummy))) {
+                const newRows = rows.map(r => ({
+                  id: r.id || `mock-${crypto.randomUUID()}`,
+                  created_at: new Date().toISOString(),
+                  ...r
+                }));
+                list.push(...newRows);
+                saveCollection(collName, list);
+                
+                if (table === 'workbenches') {
+                  const members = getCollection('workbench_members');
+                  const labels = getCollection('labels');
+                  newRows.forEach(wb => {
+                    members.push({
+                      id: `mock-${crypto.randomUUID()}`,
+                      workbench_id: wb.id,
+                      user_id: wb.owner_user_id || 'mock-user-id',
+                      role: 'founder',
+                      created_at: new Date().toISOString()
+                    });
+
+                    // Seed default labels for this new mock workbench
+                    const defaultLabels = [
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Cash & Cash Equivalents', type: 'asset', sub_account: 'Cash & Cash Equivalents' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Bank Accounts', type: 'asset', sub_account: 'Bank Accounts' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Accounts Receivable (AR)', type: 'asset', sub_account: 'Accounts Receivable (AR)' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Accounts Payable (AP)', type: 'liability', sub_account: 'Accounts Payable (AP)' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Operating Revenue', type: 'income', sub_account: 'Operating Revenue' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Salaries & Wages', type: 'expense', sub_account: 'Salaries & Wages' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Rent', type: 'expense', sub_account: 'Rent' },
+                      { id: `mock-label-${crypto.randomUUID()}`, workbench_id: wb.id, name: 'Software & Subscriptions', type: 'expense', sub_account: 'Software & Subscriptions' },
+                    ];
+                    labels.push(...defaultLabels);
+                  });
+                  saveCollection('workbench_members', members);
+                  saveCollection('labels', labels);
+                }
+                return makeMockBuilder(newRows);
+              }
+              
+              return originalFrom(table).insert(data);
+            },
+            
+            upsert: (data) => {
+              if (!collName) return makeMockBuilder([data]);
+              const list = getCollection(collName);
+              const rows = Array.isArray(data) ? data : [data];
+              const hasMock = rows.some(r => isMockId(r.workbench_id) || isMockId(r.id) || r.is_dummy);
+              
+              if (hasMock) {
+                rows.forEach(r => {
+                  const idx = list.findIndex(item => item.id === r.id);
+                  if (idx >= 0) {
+                    list[idx] = { ...list[idx], ...r };
+                  } else {
+                    list.push({ id: `mock-${crypto.randomUUID()}`, ...r });
+                  }
+                });
+                saveCollection(collName, list);
+                return makeMockBuilder(rows);
+              }
+              
+              return originalFrom(table).upsert(data);
+            },
+            
+            update: (data) => {
+              return {
+                eq: (col, val) => {
+                  if (isMockId(val) || (col === 'workbench_id' && isMockId(val))) {
+                    const list = getCollection(collName);
+                    list.forEach(item => {
+                      if (item[col] === val) {
+                        Object.assign(item, data);
+                      }
+                    });
+                    saveCollection(collName, list);
+                    return makeMockBuilder([data]);
+                  }
+                  return originalFrom(table).update(data).eq(col, val);
+                }
+              };
+            },
+            
+            delete: () => {
+              return {
+                eq: (col, val) => {
+                  if (isMockId(val) || (col === 'workbench_id' && isMockId(val))) {
+                    const list = getCollection(collName);
+                    const filtered = list.filter(item => item[col] !== val);
+                    saveCollection(collName, filtered);
+                    return makeMockBuilder([]);
+                  }
+                  return originalFrom(table).delete().eq(col, val);
+                }
+              };
             }
-            return makeMockBuilder([]);
-          }
+          };
         };
       }
-    };
-  }
+      return Reflect.get(target, prop);
+    }
+  });
 };
 
-// Export active clients depending on toggle
-const supabase = USE_DUMMY_MODE ? supabaseMock : realSupabase;
-const supabaseAdmin = USE_DUMMY_MODE ? supabaseMock : realSupabaseAdmin;
+const supabase = buildHybridClient(realSupabase);
+const supabaseAdmin = buildHybridClient(realSupabaseAdmin);
 
 export { supabase, supabaseAdmin };
 
