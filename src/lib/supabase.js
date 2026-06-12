@@ -4,18 +4,14 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
 
-// Use the Service Role Key globally if available to bypass all RLS constraints for local dev/testing
-const activeKey = supabaseServiceRoleKey || supabaseAnonKey;
-
 if (supabaseServiceRoleKey) {
-  console.log("[DEBUG] Supabase client initialized with Service Role Key (RLS Bypassed Globally)");
+  console.log("[DEBUG] Supabase admin client initialized with Service Role Key (RLS Bypassed)");
 } else {
-  console.warn("[WARNING] Service Role Key is missing or undefined on client side! falling back to Anon Key (RLS Active).");
+  console.warn("[WARNING] Service Role Key is missing or undefined on client side! RLS bypass will not work.");
 }
 
-console.log("[DEBUG] Active Key Type:", activeKey === supabaseServiceRoleKey ? "Service Role Key (Bypass)" : "Anon Key (Strict)");
-
-const supabase = createClient(supabaseUrl, activeKey, {
+// Main client for normal user operations, uses anon key and persists session
+const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     flowType: 'pkce',
     autoRefreshToken: true,
@@ -24,7 +20,15 @@ const supabase = createClient(supabaseUrl, activeKey, {
   },
 });
 
-const supabaseAdmin = supabase;
+// Admin client to bypass RLS constraints for backend-like operations
+// We disable persistSession so that it does NOT share or store user auth state
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false
+  }
+});
 
 export { supabase, supabaseAdmin };
 
