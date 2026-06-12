@@ -10,8 +10,10 @@ const activeKey = supabaseServiceRoleKey || supabaseAnonKey;
 if (supabaseServiceRoleKey) {
   console.log("[DEBUG] Supabase client initialized with Service Role Key (RLS Bypassed Globally)");
 } else {
-  console.warn("[WARNING] Service Role Key missing, falling back to Anon Key (RLS Active)");
+  console.warn("[WARNING] Service Role Key is missing or undefined on client side! falling back to Anon Key (RLS Active).");
 }
+
+console.log("[DEBUG] Active Key Type:", activeKey === supabaseServiceRoleKey ? "Service Role Key (Bypass)" : "Anon Key (Strict)");
 
 const supabase = createClient(supabaseUrl, activeKey, {
   auth: {
