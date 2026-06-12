@@ -111,7 +111,18 @@ const makeMockBuilder = (data = []) => {
 
 const originalFrom = realSupabase.from.bind(realSupabase);
 
+const sanitizePayload = (data) => {
+  if (!data) return data;
+  if (Array.isArray(data)) {
+    return data.map(({ is_dummy, ...rest }) => rest);
+  }
+  const { is_dummy, ...rest } = data;
+  return rest;
+};
+
 const buildHybridClient = (baseClient) => {
+  const baseFrom = baseClient.from.bind(baseClient);
+  
   return new Proxy(baseClient, {
     get(target, prop) {
       if (prop === 'from') {
@@ -131,20 +142,24 @@ const buildHybridClient = (baseClient) => {
                 // Route to localStorage if filtering by mock ID
                 if ((eqCol === 'workbench_id' && isMockId(eqVal)) || 
                     (eqCol === 'id' && isMockId(eqVal) && table === 'workbenches')) {
+                  console.log(`[MOCK DB] Intercepting SELECT on '${table}' for mock ID:`, eqVal);
                   const filtered = localList.filter(item => item[eqCol] === eqVal);
                   return makeMockBuilder(filtered);
                 }
                 
                 if (inCol === 'id' && table === 'workbenches' && inVals.some(isMockId)) {
+                  console.log(`[MOCK DB] Intercepting SELECT IN on '${table}' for mock IDs:`, inVals);
                   return {
                     then: async (resolve) => {
                       const dbIds = inVals.filter(id => !isMockId(id));
                       let dbData = [];
                       if (dbIds.length > 0) {
                         try {
-                          const res = await originalFrom(table).select(fields).in(inCol, dbIds);
+                          const res = await baseFrom(table).select(fields).in(inCol, dbIds);
                           dbData = res.data || [];
-                        } catch (e) {}
+                        } catch (e) {
+                          console.error("[MOCK DB] DB SELECT IN error:", e);
+                        }
                       }
                       const mockData = localList.filter(item => inVals.includes(item.id));
                       resolve({ data: [...dbData, ...mockData], error: null });
@@ -155,25 +170,31 @@ const buildHybridClient = (baseClient) => {
                 // Special case: Fetching all workbenches or memberships
                 if (!eqCol && !inCol) {
                   if (table === 'workbenches') {
+                    console.log(`[MOCK DB] Intercepting SELECT ALL on 'workbenches' to merge local workbenches`);
                     return {
                       then: async (resolve) => {
                         let dbData = [];
                         try {
-                          const res = await originalFrom(table).select(fields).order('created_at', { ascending: false });
+                          const res = await baseFrom(table).select(fields).order('created_at', { ascending: false });
                           dbData = res.data || [];
-                        } catch (e) {}
+                        } catch (e) {
+                          console.error("[MOCK DB] DB SELECT ALL workbenches error:", e);
+                        }
                         resolve({ data: [...dbData, ...localList], error: null });
                       }
                     };
                   }
                   if (table === 'workbench_members') {
+                    console.log(`[MOCK DB] Intercepting SELECT ALL on 'workbench_members' to merge local memberships`);
                     return {
                       then: async (resolve) => {
                         let dbData = [];
                         try {
-                          const res = await originalFrom(table).select(fields);
+                          const res = await baseFrom(table).select(fields);
                           dbData = res.data || [];
-                        } catch (e) {}
+                        } catch (e) {
+                          console.error("[MOCK DB] DB SELECT ALL memberships error:", e);
+                        }
                         resolve({ data: [...dbData, ...localList], error: null });
                       }
                     };
@@ -181,7 +202,7 @@ const buildHybridClient = (baseClient) => {
                 }
                 
                 // Fallback to real Supabase query
-                let query = originalFrom(table).select(fields);
+                let query = baseFrom(table).select(fields);
                 if (eqCol) query = query.eq(eqCol, eqVal);
                 if (inCol) query = query.in(inCol, inVals);
                 return query;
@@ -224,8 +245,10 @@ const buildHybridClient = (baseClient) => {
               const rows = Array.isArray(data) ? data : [data];
               
               const hasMock = rows.some(r => isMockId(r.workbench_id) || isMockId(r.id) || r.is_dummy);
+              const isWorkbenchesMock = table === 'workbenches' && rows.some(r => r.name.toLowerCase().includes('dummy') || r.is_dummy);
               
-              if (hasMock || (table === 'workbenches' && rows.some(r => r.name.toLowerCase().includes('dummy') || r.is_dummy))) {
+              if (hasMock || isWorkbenchesMock) {
+                console.log(`[MOCK DB] Intercepting INSERT on '${table}':`, rows);
                 const newRows = rows.map(r => ({
                   id: r.id || `mock-${crypto.randomUUID()}`,
                   created_at: new Date().toISOString(),
@@ -265,7 +288,9 @@ const buildHybridClient = (baseClient) => {
                 return makeMockBuilder(newRows);
               }
               
-              return originalFrom(table).insert(data);
+              // Sanitized database insert to prevent 'is_dummy' schema errors
+              const sanitizedData = sanitizePayload(data);
+              return baseFrom(table).insert(sanitizedData);
             },
             
             upsert: (data) => {
@@ -275,6 +300,7 @@ const buildHybridClient = (baseClient) => {
               const hasMock = rows.some(r => isMockId(r.workbench_id) || isMockId(r.id) || r.is_dummy);
               
               if (hasMock) {
+                console.log(`[MOCK DB] Intercepting UPSERT on '${table}':`, rows);
                 rows.forEach(r => {
                   const idx = list.findIndex(item => item.id === r.id);
                   if (idx >= 0) {
@@ -287,13 +313,15 @@ const buildHybridClient = (baseClient) => {
                 return makeMockBuilder(rows);
               }
               
-              return originalFrom(table).upsert(data);
+              const sanitizedData = sanitizePayload(data);
+              return baseFrom(table).upsert(sanitizedData);
             },
             
             update: (data) => {
               return {
                 eq: (col, val) => {
                   if (isMockId(val) || (col === 'workbench_id' && isMockId(val))) {
+                    console.log(`[MOCK DB] Intercepting UPDATE on '${table}' for ID ${val}:`, data);
                     const list = getCollection(collName);
                     list.forEach(item => {
                       if (item[col] === val) {
@@ -303,7 +331,9 @@ const buildHybridClient = (baseClient) => {
                     saveCollection(collName, list);
                     return makeMockBuilder([data]);
                   }
-                  return originalFrom(table).update(data).eq(col, val);
+                  
+                  const sanitizedData = sanitizePayload(data);
+                  return baseFrom(table).update(sanitizedData).eq(col, val);
                 }
               };
             },
@@ -312,12 +342,13 @@ const buildHybridClient = (baseClient) => {
               return {
                 eq: (col, val) => {
                   if (isMockId(val) || (col === 'workbench_id' && isMockId(val))) {
+                    console.log(`[MOCK DB] Intercepting DELETE on '${table}' for ID:`, val);
                     const list = getCollection(collName);
                     const filtered = list.filter(item => item[col] !== val);
                     saveCollection(collName, filtered);
                     return makeMockBuilder([]);
                   }
-                  return originalFrom(table).delete().eq(col, val);
+                  return baseFrom(table).delete().eq(col, val);
                 }
               };
             }
